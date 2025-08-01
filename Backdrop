@@ -1,0 +1,158 @@
+import React, { useCallback, useState, useRef, useEffect } from "react";
+// ... (imports)
+
+// You can REMOVE the useEffect with the document.addEventListener,
+// as the backdrop div will handle the click outside.
+
+export const ReactFlowWrapper = () => {
+  // ... (your existing state and hooks)
+
+  const [deleteButton, setDeleteButton] = useState({ /* ... */ });
+  const [nodeContextMenu, setNodeContextMenu] = useState({ /* ... */ });
+  const [edgeMenu, setEdgeMenu] = useState({ /* ... */ });
+
+  // Add handlers to close the menus
+  const closeDeleteButton = useCallback(() => {
+    setDeleteButton({ visible: false, x: 0, y: 0, node: null });
+  }, []);
+
+  const closeNodeContextMenu = useCallback(() => {
+    setNodeContextMenu({ visible: false, x: 0, y: 0, node: null });
+  }, []);
+
+  const closeEdgeMenu = useCallback(() => {
+    setEdgeMenu({ visible: false, x: 0, y: 0, edgeId: null });
+  }, []);
+
+  // Your click handlers now explicitly close other menus
+  const onNodeClick = useCallback((event, node) => {
+    event.preventDefault();
+    const screenPosition = project({ x: node.position.x + node.width, y: node.position.y + node.height });
+    setDeleteButton({
+      visible: true,
+      x: screenPosition.x,
+      y: screenPosition.y,
+      node: node,
+    });
+
+    closeNodeContextMenu();
+    closeEdgeMenu();
+  }, [project, closeNodeContextMenu, closeEdgeMenu]);
+
+  const onNodeContextMenu = useCallback((event, node) => {
+    event.preventDefault();
+    closeDeleteButton();
+    closeEdgeMenu();
+    setNodeContextMenu({
+      visible: true,
+      x: event.clientX,
+      y: event.clientY,
+      node: node,
+    });
+  }, [closeDeleteButton, closeEdgeMenu]);
+
+  // ... (rest of your component logic)
+
+  // Update handleDeleteNode
+  const handleDeleteNode = useCallback((nodeId) => {
+    if (nodeId) {
+      dispatch(pushStateToHistory());
+      dispatch(updateNodes([{ id: nodeId, type: 'remove' }]));
+    }
+    // No need for explicit close handler call here, as the backdrop will be unmounted
+  }, [dispatch]);
+  
+  // Note: We'll still need to call closeDeleteButton() or closeNodeContextMenu()
+  // if you want to close the menu without deleting the item.
+  // For example, if you had a 'Cancel' button on the menu.
+  // In this new setup, the backdrop will handle closing on outside clicks.
+  // We'll keep the close calls inside handleDeleteNode() for good practice.
+
+
+  return (
+    <div style={{ width: "100vw", height: "100vh" }} ref={reactFlowWrapper}>
+      {/* ... ReactFlow component ... */}
+      
+      {/* --- BACKDROP FOR BOTH MENUS --- */}
+      {(deleteButton.visible || nodeContextMenu.visible || edgeMenu.visible) && (
+        <div
+          onClick={() => {
+            closeDeleteButton();
+            closeNodeContextMenu();
+            closeEdgeMenu();
+          }}
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+            zIndex: 9999, // IMPORTANT: Should be lower than the menus, but higher than the canvas
+          }}
+        />
+      )}
+
+      {/* --- LEFT-CLICK DELETE BUTTON --- */}
+      {deleteButton.visible && deleteButton.node && (
+        <button
+          onClick={() => handleDeleteNode(deleteButton.node.id)}
+          style={{
+            ...buttonStyle,
+            position: "absolute",
+            top: `${deleteButton.y}px`,
+            left: `${deleteButton.x}px`,
+            backgroundColor: '#e74c3c',
+            // IMPORTANT: zIndex must be higher than the backdrop!
+            zIndex: 10000, 
+            padding: '5px 10px',
+            fontSize: '0.8em',
+          }}
+        >
+          Delete Node
+        </button>
+      )}
+
+      {/* --- RIGHT-CLICK CONTEXT MENU --- */}
+      {nodeContextMenu.visible && nodeContextMenu.node && (
+        <div
+          style={{
+            ...menuPanelStyle,
+            position: "absolute",
+            top: `${nodeContextMenu.y}px`,
+            left: `${nodeContextMenu.x}px`,
+            // IMPORTANT: zIndex must be higher than the backdrop!
+            zIndex: 10000,
+          }}
+        >
+          <strong style={{ display: 'block', marginBottom: '8px' }}>Node Options</strong>
+          <button
+            onClick={() => handleDeleteNode(nodeContextMenu.node.id)}
+            style={{
+              ...buttonStyle,
+              backgroundColor: '#e74c3c',
+              width: "100%",
+            }}
+          >
+            Delete Node
+          </button>
+          <button
+            onClick={() => {
+              alert(`Node ${nodeContextMenu.node.id} info...`);
+              closeNodeContextMenu();
+            }}
+            style={{
+              ...buttonStyle,
+              backgroundColor: '#3498db',
+              width: "100%",
+              marginTop: '8px',
+            }}
+          >
+            View Info
+          </button>
+        </div>
+      )}
+
+      {/* ... (rest of your JSX) */}
+    </div>
+  );
+};
