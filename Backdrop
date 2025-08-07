@@ -156,3 +156,69 @@ export const ReactFlowWrapper = () => {
     </div>
   );
 };
+
+
+
+
+
+
+// In src/ReactFlowWrapper.js
+
+// ... (other imports)
+
+export const ReactFlowWrapper = () => {
+  // ... (your existing state and hooks)
+
+  const [nodeContextMenu, setNodeContextMenu] = useState({
+    visible: false,
+    x: 0,
+    y: 0,
+    node: null,
+  });
+
+  // Let's define the dimensions of your menu. You can get these dynamically or use a fixed size.
+  const menuWidth = 150; // The width of your context menu
+  const menuHeight = 120; // The approximate height of your context menu
+
+  // ... (your other handlers)
+
+  // --- Handler for right-click (shows a full context menu) ---
+  const onNodeContextMenu = useCallback((event, node) => {
+    event.preventDefault();
+
+    // Hide the left-click delete button
+    setDeleteButton({ visible: false, x: 0, y: 0, node: null });
+    
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    let newX = event.clientX;
+    let newY = event.clientY;
+
+    // Check if the menu goes off the right edge
+    if (event.clientX + menuWidth > viewportWidth) {
+      newX = viewportWidth - menuWidth - 10; // Shift left by menu width + a small margin
+    }
+
+    // Check if the menu goes off the bottom edge
+    if (event.clientY + menuHeight > viewportHeight) {
+      newY = viewportHeight - menuHeight - 10; // Shift up by menu height + a small margin
+    }
+    
+    // In case the menu is displayed at the top or left edge
+    if(newX < 0) newX = 10;
+    if(newY < 0) newY = 10;
+    
+    // Position the context menu at the adjusted location
+    setNodeContextMenu({
+      visible: true,
+      x: newX,
+      y: newY,
+      node: node,
+    });
+  }, []);
+
+  // ... (rest of your component and JSX)
+};
+
+
