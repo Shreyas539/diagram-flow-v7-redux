@@ -1,1 +1,101 @@
 
+import React, { useCallback, useState, useRef } from "react";
+import { useReactFlow } from "@xyflow/react";
+// ... other imports
+
+export const ReactFlowWrapper = () => {
+  // ... existing states and hooks
+
+  // State for the hover menu
+  const [hoveredNodeInfo, setHoveredNodeInfo] = useState(null);
+  
+  // Ref to hold the timeout ID
+  const hoverTimeoutRef = useRef(null);
+
+  const { project } = useReactFlow();
+
+  // --- New Handlers for Hover Events ---
+
+  const onNodeMouseEnter = useCallback((event, node) => {
+    // Clear any existing timeout to prevent flicker
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+    }
+    
+    // Calculate the position for the menu
+    const screenPosition = project({ 
+      x: node.position.x + node.width / 2, // Center the menu above the node
+      y: node.position.y 
+    });
+
+    setHoveredNodeInfo({
+      visible: true,
+      x: screenPosition.x,
+      y: screenPosition.y,
+      data: node.data
+    });
+  }, [project]);
+
+  const onNodeMouseLeave = useCallback(() => {
+    // Set a timeout to hide the menu after a short delay
+    hoverTimeoutRef.current = setTimeout(() => {
+      setHoveredNodeInfo(null);
+    }, 200); // 200ms delay
+  }, []);
+
+  const onHoverMenuMouseEnter = useCallback(() => {
+    // If the mouse re-enters the menu, clear the timeout
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+    }
+  }, []);
+
+  const onHoverMenuMouseLeave = useCallback(() => {
+    // Hide the menu when the mouse leaves the menu itself
+    setHoveredNodeInfo(null);
+  }, []);
+
+  // ... rest of your component logic
+};
+
+
+
+// Inside the return statement of ReactFlowWrapper
+
+return (
+  <div style={{ width: "100vw", height: "100vh" }}>
+    <ReactFlow
+      // ... existing props
+      onNodeMouseEnter={onNodeMouseEnter}
+      onNodeMouseLeave={onNodeMouseLeave}
+      // ... other handlers
+    >
+      {/* ... */}
+    </ReactFlow>
+
+    {/* --- Hover Menu JSX --- */}
+    {hoveredNodeInfo?.visible && (
+      <div
+        onMouseEnter={onHoverMenuMouseEnter}
+        onMouseLeave={onHoverMenuMouseLeave}
+        style={{
+          position: 'absolute',
+          top: hoveredNodeInfo.y,
+          left: hoveredNodeInfo.x,
+          // Add your custom styles for the menu here
+          backgroundColor: '#333',
+          color: 'white',
+          padding: '10px',
+          borderRadius: '5px',
+          zIndex: 9999, // Ensure it's on top
+          transform: 'translate(-50%, -100%)', // Position it above the node
+          pointerEvents: 'auto', // Ensure the div is a valid hover target
+        }}
+      >
+        <p>Name: {hoveredNodeInfo.data.label}</p>
+        <p>Color: {hoveredNodeInfo.data.color}</p>
+        {/* Add more info as needed */}
+      </div>
+    )}
+  </div>
+);
