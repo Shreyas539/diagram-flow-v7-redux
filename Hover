@@ -1,101 +1,373 @@
+// src/redux/apiMiddleware.js
+import { addEdge, updateEdges } from './flowSlice';
+import { ActionCreators } from 'redux-undo';
 
-import React, { useCallback, useState, useRef } from "react";
-import { useReactFlow } from "@xyflow/react";
-// ... other imports
-
-export const ReactFlowWrapper = () => {
-  // ... existing states and hooks
-
-  // State for the hover menu
-  const [hoveredNodeInfo, setHoveredNodeInfo] = useState(null);
-  
-  // Ref to hold the timeout ID
-  const hoverTimeoutRef = useRef(null);
-
-  const { project } = useReactFlow();
-
-  // --- New Handlers for Hover Events ---
-
-  const onNodeMouseEnter = useCallback((event, node) => {
-    // Clear any existing timeout to prevent flicker
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current);
-    }
-    
-    // Calculate the position for the menu
-    const screenPosition = project({ 
-      x: node.position.x + node.width / 2, // Center the menu above the node
-      y: node.position.y 
-    });
-
-    setHoveredNodeInfo({
-      visible: true,
-      x: screenPosition.x,
-      y: screenPosition.y,
-      data: node.data
-    });
-  }, [project]);
-
-  const onNodeMouseLeave = useCallback(() => {
-    // Set a timeout to hide the menu after a short delay
-    hoverTimeoutRef.current = setTimeout(() => {
-      setHoveredNodeInfo(null);
-    }, 200); // 200ms delay
-  }, []);
-
-  const onHoverMenuMouseEnter = useCallback(() => {
-    // If the mouse re-enters the menu, clear the timeout
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current);
-    }
-  }, []);
-
-  const onHoverMenuMouseLeave = useCallback(() => {
-    // Hide the menu when the mouse leaves the menu itself
-    setHoveredNodeInfo(null);
-  }, []);
-
-  // ... rest of your component logic
+// Mock API functions
+const createLinkApi = (source, target) => {
+  console.log(`API: Creating link from ${source} to ${target}`);
+  return Promise.resolve({ success: true, message: 'Link created' });
 };
 
+const deleteLinkApi = (linkId) => {
+  console.log(`API: Deleting link with ID ${linkId}`);
+  return Promise.resolve({ success: true, message: 'Link deleted' });
+};
+
+const getLinkDetailsFromState = (state, id) => {
+  const allEdges = state.flow.present.edges;
+  const edge = allEdges.find(e => e.id === id);
+  return edge ? { source: edge.source, target: edge.target } : null;
+};
+
+const apiMiddleware = (store) => (next) => (action) => {
+  // First, let the action go through to the reducer
+  // This updates the Redux state immediately
+  const result = next(action);
+
+  // Then, check the action type to trigger API calls
+  switch (action.type) {
+    case addEdge.type:
+      // This is a new edge creation from onConnect.
+      // Call the create API.
+      const { source, target } = action.payload;
+      createLinkApi(source, target);
+      break;
+
+    case updateEdges.type:
+      // This handles edge deletion (and other changes).
+      // Check for 'remove' changes.
+      const changes = action.payload;
+      const removedEdges = changes.filter(c => c.type === 'remove');
+      removedEdges.forEach(removedEdge => {
+        // You need to know the source and target to call the API.
+        // This is a limitation; the API might need the original ID.
+        // You'll need to pass more info in the action or find it in the state.
+        deleteLinkApi(removedEdge.id);
+      });
+      break;
+
+    case ActionCreators.undo().type:
+      // The state has just been undone.
+      // Compare the current state with the previous state to find what changed.
+      const { past } = store.getState().flow;
+      if (past.length > 0) {
+        const lastPresentEdges = past[past.length - 1].edges;
+        const currentEdges = store.getState().flow.present.edges;
+        
+        // Find the edge that was removed by the undo action
+        const undoneEdge = lastPresentEdges.find(edge => 
+          !currentEdges.some(e => e.id === edge.id)
+        );
+
+        if (undoneEdge) {
+          deleteLinkApi(undoneEdge.id);
+        }
+      }
+      break;
+
+    case ActionCreators.redo().type:
+      // The state has just been redone.
+      // Find the edge that was added back.
+      const { future } = store.getState().flow;
+      if (future.length > 0) {
+        const nextPresentEdges = future[0].edges;
+        const currentEdges = store.getState().flow.present.edges;
+        
+        // Find the edge that was re-added by the redo action
+        const redoneEdge = nextPresentEdges.find(edge => 
+          !currentEdges.some(e => e.id === edge.id)
+        );
+
+        if (redoneEdge) {
+          // You need the source and target.
+          // In a real app, you'd store this in the edge object.
+          createLinkApi(redoneEdge.source, redoneEdge.target);
+        }
+      }
+      break;
+
+    default:
+      break;
+  }
+
+  return result;
+};
+
+export default apiMiddleware;
 
 
-// Inside the return statement of ReactFlowWrapper
 
-return (
-  <div style={{ width: "100vw", height: "100vh" }}>
-    <ReactFlow
-      // ... existing props
-      onNodeMouseEnter={onNodeMouseEnter}
-      onNodeMouseLeave={onNodeMouseLeave}
-      // ... other handlers
-    >
-      {/* ... */}
-    </ReactFlow>
 
-    {/* --- Hover Menu JSX --- */}
-    {hoveredNodeInfo?.visible && (
-      <div
-        onMouseEnter={onHoverMenuMouseEnter}
-        onMouseLeave={onHoverMenuMouseLeave}
-        style={{
-          position: 'absolute',
-          top: hoveredNodeInfo.y,
-          left: hoveredNodeInfo.x,
-          // Add your custom styles for the menu here
-          backgroundColor: '#333',
-          color: 'white',
-          padding: '10px',
-          borderRadius: '5px',
-          zIndex: 9999, // Ensure it's on top
-          transform: 'translate(-50%, -100%)', // Position it above the node
-          pointerEvents: 'auto', // Ensure the div is a valid hover target
-        }}
-      >
-        <p>Name: {hoveredNodeInfo.data.label}</p>
-        <p>Color: {hoveredNodeInfo.data.color}</p>
-        {/* Add more info as needed */}
-      </div>
-    )}
-  </div>
+// src/redux/store.js
+import { configureStore } from '@reduxjs/toolkit';
+import flowReducer from './flowSlice';
+import undoable, { excludeAction, StateWithHistory } from 'redux-undo';
+import apiMiddleware from './apiMiddleware'; // Import your middleware
+
+const store = configureStore({
+  reducer: {
+    flow: undoable(flowReducer, {
+      // Exclude redundant actions from history
+      filter: excludeAction([
+        'flow/updateNodes',
+        'flow/updateEdges',
+        'flow/updateNodeColor',
+      ]),
+      // Customize the limit of undo/redo states
+      limit: 10,
+    }),
+  },
+  // Add the middleware here
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({ serializableCheck: false }).concat(apiMiddleware),
+});
+
+export { store };
+
+
+
+
+
+// In src/ReactFlowWrapper.js
+
+const onConnect = useCallback(
+  (params) => {
+    // Dispatch the addEdge action
+    dispatch(pushStateToHistory());
+    dispatch(addEdgeAction({
+      ...params,
+      // Add any data needed for API call here
+      type: "offset",
+      markerEnd: { type: MarkerType.Arrow },
+      animated: true,
+    }));
+  },
+  [dispatch]
 );
+
+const onEdgesChange = useCallback(
+  (changes) => {
+    const shouldPushHistory = changes.some(
+      (change) => change.type === 'remove'
+    );
+
+    if (shouldPushHistory) {
+      dispatch(pushStateToHistory());
+    }
+    // Dispatch the updateEdges action
+    dispatch(updateEdges(changes));
+  },
+  [dispatch]
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Based on your requirement to trigger API calls for creating and deleting links during undo/redo operations, you need to adjust your Redux and API-handling logic. The key is to move the API calls from the initial `onConnect` and `onEdgesChange` callbacks to the Redux `reducer` or a **Redux middleware**. This ensures the API is synchronized with the state changes caused by both user actions and undo/redo actions.
+
+Here's a step-by-step approach to implement this:
+
+### 1\. Identify the Action Types
+
+You need to differentiate between actions that trigger the API call. The `onConnect` callback dispatches an action to add an edge, and the undo/redo functionality will dispatch specific actions to reverse those changes.
+
+  * `addEdge` action: This is a user-initiated action (creating a new edge). This is the only one you'll trigger from `onConnect`.
+  * `undo` action: This is a user action to revert the last state change. When an edge creation is undone, it's effectively a deletion.
+  * `redo` action: This is a user action to re-apply a reverted state change. When an edge creation is redone, it's a re-creation.
+
+-----
+
+### 2\. Implement a Redux Middleware
+
+Redux middleware is the ideal place to handle this. It allows you to intercept actions *before* they reach the reducer and perform side effects, such as API calls. This is better than putting API calls directly in `onConnect` because `onConnect` doesn't know if the action is part of an undo/redo sequence.
+
+Create a new file, for example, `src/redux/apiMiddleware.js`:
+
+```javascript
+// src/redux/apiMiddleware.js
+import { addEdge, updateEdges } from './flowSlice';
+import { ActionCreators } from 'redux-undo';
+
+// Mock API functions
+const createLinkApi = (source, target) => {
+  console.log(`API: Creating link from ${source} to ${target}`);
+  return Promise.resolve({ success: true, message: 'Link created' });
+};
+
+const deleteLinkApi = (linkId) => {
+  console.log(`API: Deleting link with ID ${linkId}`);
+  return Promise.resolve({ success: true, message: 'Link deleted' });
+};
+
+const getLinkDetailsFromState = (state, id) => {
+  const allEdges = state.flow.present.edges;
+  const edge = allEdges.find(e => e.id === id);
+  return edge ? { source: edge.source, target: edge.target } : null;
+};
+
+const apiMiddleware = (store) => (next) => (action) => {
+  // First, let the action go through to the reducer
+  // This updates the Redux state immediately
+  const result = next(action);
+
+  // Then, check the action type to trigger API calls
+  switch (action.type) {
+    case addEdge.type:
+      // This is a new edge creation from onConnect.
+      // Call the create API.
+      const { source, target } = action.payload;
+      createLinkApi(source, target);
+      break;
+
+    case updateEdges.type:
+      // This handles edge deletion (and other changes).
+      // Check for 'remove' changes.
+      const changes = action.payload;
+      const removedEdges = changes.filter(c => c.type === 'remove');
+      removedEdges.forEach(removedEdge => {
+        // You need to know the source and target to call the API.
+        // This is a limitation; the API might need the original ID.
+        // You'll need to pass more info in the action or find it in the state.
+        deleteLinkApi(removedEdge.id);
+      });
+      break;
+
+    case ActionCreators.undo().type:
+      // The state has just been undone.
+      // Compare the current state with the previous state to find what changed.
+      const { past } = store.getState().flow;
+      if (past.length > 0) {
+        const lastPresentEdges = past[past.length - 1].edges;
+        const currentEdges = store.getState().flow.present.edges;
+        
+        // Find the edge that was removed by the undo action
+        const undoneEdge = lastPresentEdges.find(edge => 
+          !currentEdges.some(e => e.id === edge.id)
+        );
+
+        if (undoneEdge) {
+          deleteLinkApi(undoneEdge.id);
+        }
+      }
+      break;
+
+    case ActionCreators.redo().type:
+      // The state has just been redone.
+      // Find the edge that was added back.
+      const { future } = store.getState().flow;
+      if (future.length > 0) {
+        const nextPresentEdges = future[0].edges;
+        const currentEdges = store.getState().flow.present.edges;
+        
+        // Find the edge that was re-added by the redo action
+        const redoneEdge = nextPresentEdges.find(edge => 
+          !currentEdges.some(e => e.id === edge.id)
+        );
+
+        if (redoneEdge) {
+          // You need the source and target.
+          // In a real app, you'd store this in the edge object.
+          createLinkApi(redoneEdge.source, redoneEdge.target);
+        }
+      }
+      break;
+
+    default:
+      break;
+  }
+
+  return result;
+};
+
+export default apiMiddleware;
+```
+
+-----
+
+### 3\. Apply the Middleware to Your Store
+
+In your `src/redux/store.js` file, you need to import the middleware and apply it using `applyMiddleware`.
+
+```javascript
+// src/redux/store.js
+import { configureStore } from '@reduxjs/toolkit';
+import flowReducer from './flowSlice';
+import undoable, { excludeAction, StateWithHistory } from 'redux-undo';
+import apiMiddleware from './apiMiddleware'; // Import your middleware
+
+const store = configureStore({
+  reducer: {
+    flow: undoable(flowReducer, {
+      // Exclude redundant actions from history
+      filter: excludeAction([
+        'flow/updateNodes',
+        'flow/updateEdges',
+        'flow/updateNodeColor',
+      ]),
+      // Customize the limit of undo/redo states
+      limit: 10,
+    }),
+  },
+  // Add the middleware here
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({ serializableCheck: false }).concat(apiMiddleware),
+});
+
+export { store };
+```
+
+-----
+
+### 4\. Adjust the `onConnect` and `onEdgesChange` Handlers
+
+With the middleware in place, the `onConnect` and `onEdgesChange` handlers in `ReactFlowWrapper.js` become much simpler. They only need to dispatch the appropriate actions to the Redux store. The API calls are handled by the middleware.
+
+```javascript
+// In src/ReactFlowWrapper.js
+
+const onConnect = useCallback(
+  (params) => {
+    // Dispatch the addEdge action
+    dispatch(pushStateToHistory());
+    dispatch(addEdgeAction({
+      ...params,
+      // Add any data needed for API call here
+      type: "offset",
+      markerEnd: { type: MarkerType.Arrow },
+      animated: true,
+    }));
+  },
+  [dispatch]
+);
+
+const onEdgesChange = useCallback(
+  (changes) => {
+    const shouldPushHistory = changes.some(
+      (change) => change.type === 'remove'
+    );
+
+    if (shouldPushHistory) {
+      dispatch(pushStateToHistory());
+    }
+    // Dispatch the updateEdges action
+    dispatch(updateEdges(changes));
+  },
+  [dispatch]
+);
+```
+
+### Summary
+
+By using Redux middleware, you create a centralized and decoupled system for handling API calls. This approach ensures that your API is always in sync with your application state, regardless of whether that state change was triggered by a user action (connecting nodes, deleting with backspace) or an undo/redo command. The middleware acts as a single point of truth for all API interactions related to your flow's state changes.
