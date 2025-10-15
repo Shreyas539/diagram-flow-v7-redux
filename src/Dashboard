@@ -1,0 +1,403 @@
+That's ambitious! Generating all the code for a full React, Redux, Chakra UI, ApexCharts NMS application is too extensive for a single response, as it requires setting up a backend WebSocket server, Redux boilerplate, custom hooks, and multiple components.
+
+However, I can provide the core, critical code snippets that demonstrate the full data flow and implementation of the dynamic, real-time chart feature using the Composite Key (Devicesid___ParamId) strategy in React Redux.
+
+This includes:
+
+Utilities: The Composite ID creator.
+
+Redux: The Action Types and the Reducer.
+
+Redux Middleware: Pseudocode for handling WebSocket I/O.
+
+React Components: The Chart component, connected via useSelector.
+
+1. ⚙️ Utilities
+This function is essential for creating the unique identifier (the Composite Key).
+
+JavaScript
+
+// src/utils/chartUtils.js
+
+/**
+ * Creates a unique identifier for a chart based on the device and parameter.
+ * This is the Composite Key used as the Redux state key.
+ * @param {string} Devicesid - The unique ID of the network device.
+ * @param {string} ParamId - The unique ID of the metric/parameter (e.g., 'cpu_load').
+ * @returns {string} The composite key (e.g., 'rtr-nyc-01___cpu_load').
+ */
+export const createChartId = (Devicesid, ParamId) => `${Devicesid}___${ParamId}`;
+2. ⚛️ Redux Implementation
+A. Action Types
+JavaScript
+
+// src/redux/actions/chartActionTypes.js
+
+export const ADD_CHART_REQUESTED = 'charts/ADD_CHART_REQUESTED';
+export const REMOVE_CHART = 'charts/REMOVE_CHART';
+export const CHART_DATA_RECEIVED = 'charts/CHART_DATA_RECEIVED'; // Used by socket handler
+B. Reducer (chartsReducer.js)
+This handles state initialization, adding new charts, and updating data efficiently via the Composite Key.
+
+JavaScript
+
+// src/redux/reducers/chartsReducer.js
+import { createChartId } from '../utils/chartUtils';
+import { 
+    ADD_CHART_REQUESTED, 
+    CHART_DATA_RECEIVED, 
+    REMOVE_CHART 
+} from '../actions/chartActionTypes';
+
+const initialState = {
+  // Use a map/object for instances for O(1) lookup speed using the Composite Key
+  instances: {}, 
+};
+
+const chartsReducer = (state = initialState, action) => {
+  switch (action.type) {
+    
+    // --- 1. ADD NEW CHART ---
+    case ADD_CHART_REQUESTED:
+      const { Devicesid, ParamId, Graphname, Paramname } = action.payload;
+      const chartId = createChartId(Devicesid, ParamId);
+      
+      // Prevent adding a chart that already exists
+      if (state.instances[chartId]) return state;
+
+      return {
+        ...state,
+        instances: {
+          ...state.instances,
+          [chartId]: { // Keyed by Composite ID
+            Devicesid,
+            ParamId,
+            Graphname,
+            Paramname,
+            Chartdata: {
+              Data: [] // Initialize with empty data array
+            }
+          }
+        }
+      };
+      
+    // --- 2. UPDATE REAL-TIME DATA ---
+    case CHART_DATA_RECEIVED:
+      // Data received from the socket handler (which created the chartId)
+      const { Devicesid: incomingDeviceId, ParamId: incomingParamId, dataPoint } = action.payload;
+      const dataChartId = createChartId(incomingDeviceId, incomingParamId);
+      
+      // If the instance doesn't exist, ignore the data (user hasn't added it)
+      if (!state.instances[dataChartId]) return state; 
+      
+      return {
+        ...state,
+        instances: {
+          ...state.instances,
+          [dataChartId]: {
+            ...state.instances[dataChartId], // Copy existing config
+            Chartdata: {
+              Data: [
+                ...state.instances[dataChartId].Chartdata.Data, // Append new data point
+                dataPoint
+              ]
+            }
+          }
+        }
+      };
+
+    // --- 3. REMOVE CHART ---
+    case REMOVE_CHART:
+        const { [action.payload.chartId]: deletedChart, ...restOfInstances } = state.instances;
+        return {
+            ...state,
+            instances: restOfInstances
+        };
+
+    default:
+      return state;
+  }
+};
+
+export default chartsReducer;
+3. 🕸️ WebSocket Middleware Pseudocode
+This logic belongs in your Redux Middleware (e.g., using Redux Thunk or Saga) to manage the side effect of communication with the backend.
+
+JavaScript
+
+// src/redux/middleware/socketMiddleware.js (Conceptual)
+
+import { createChartId } from '../utils/chartUtils';
+import { ADD_CHART_REQUESTED, CHART_DATA_RECEIVED, REMOVE_CHART } from '../actions/chartActionTypes';
+
+// Placeholder for your WebSocket connection object
+let socket = null;
+
+const socketMiddleware = store => next => action => {
+    // 1. Handle outgoing subscriptions (when a chart is added/removed)
+    if (action.type === ADD_CHART_REQUESTED && socket) {
+        const { Devicesid, ParamId } = action.payload;
+        
+        // Send a subscription request to the backend using the Composite Key
+        const subscriptionMessage = {
+            action: 'subscribe',
+            chartId: createChartId(Devicesid, ParamId),
+            Devicesid: Devicesid,
+            ParamId: ParamId
+        };
+        socket.send(JSON.stringify(subscriptionMessage));
+    }
+    
+    if (action.type === REMOVE_CHART && socket) {
+        // Send an unsubscribe request
+        socket.send(JSON.stringify({
+            action: 'unsubscribe',
+            chartId: action.payload.chartId // The full composite key
+        }));
+    }
+
+    // 2. Handle incoming data (This code runs outside of the main dispatch loop)
+    // NOTE: This setup assumes your socket handler calls store.dispatch directly
+    
+    /*
+    // Example of how the socket listener handles incoming data:
+    socket.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        
+        if (message.type === 'data') {
+            // Backend provides Devicesid, ParamId, and the data point
+            store.dispatch({
+                type: CHART_DATA_RECEIVED,
+                payload: {
+                    Devicesid: message.Devicesid,
+                    ParamId: message.ParamId,
+                    dataPoint: message.dataPoint 
+                }
+            });
+        }
+    };
+    */
+
+    return next(action);
+};
+
+export default socketMiddleware;
+4. 📈 React Components
+A. RealtimeLineChart Component
+This component reads its specific chart's data from the Redux store.
+
+JavaScript
+
+// src/components/charts/RealtimeLineChart.jsx
+import React from 'react';
+import Chart from 'react-apexcharts';
+import { useSelector } from 'react-redux';
+import { Box, Heading, Text, useTheme } from '@chakra-ui/react';
+
+const RealtimeLineChart = ({ chartId }) => {
+  // Use the Composite Key to select the specific chart instance
+  const chartInstance = useSelector(state => state.charts.instances[chartId]);
+  const theme = useTheme();
+
+  if (!chartInstance) {
+    return <Box p={4} borderWidth="1px" borderRadius="lg"><Text>Chart data loading...</Text></Box>;
+  }
+
+  // ApexCharts expects data in the format: [{ x: timestamp, y: value }, ...]
+  const seriesData = chartInstance.Chartdata.Data.map(point => ({
+    x: new Date(point.timestamp).getTime(),
+    y: point.value
+  }));
+
+  const series = [{
+    name: chartInstance.Paramname,
+    data: seriesData
+  }];
+
+  const options = {
+    chart: {
+      id: chartId,
+      animations: {
+        enabled: true,
+        easing: 'linear',
+        dynamicAnimation: { speed: 1000 }
+      },
+      toolbar: { show: false },
+      zoom: { enabled: true }
+    },
+    xaxis: {
+      type: 'datetime',
+      // Ensure X-axis aligns with Chakra theme (optional)
+      labels: { style: { colors: theme.colors.gray[500] } }
+    },
+    tooltip: { x: { format: 'HH:mm:ss' } },
+    theme: { mode: 'dark' }, // Adjust to match your Chakra theme mode
+    stroke: { curve: 'smooth' }
+    // ... other ApexCharts options
+  };
+
+  return (
+    <Box p={4} borderWidth="1px" borderRadius="lg" bg="whiteAlpha.50" minHeight="350px">
+      <Heading size="md" mb={2}>{chartInstance.Graphname}</Heading>
+      <Text fontSize="sm" color="gray.500">{chartInstance.Devicesid}</Text>
+      <Chart options={options} series={series} type="line" height={280} />
+    </Box>
+  );
+};
+
+export default RealtimeLineChart;
+B. Dashboard Component (Renderer)
+This component iterates over the keys in the Redux store and renders all user-added charts.
+
+JavaScript
+
+// src/pages/Dashboard.jsx
+import React from 'react';
+import { useSelector, useDispatch } from 'react-redux';
+import { SimpleGrid, Box, Button, Heading } from '@chakra-ui/react';
+import RealtimeLineChart from '../components/charts/RealtimeLineChart';
+
+const Dashboard = () => {
+  // Select the keys (Composite IDs) of all chart instances
+  const chartIds = useSelector(state => Object.keys(state.charts.instances));
+
+  // Placeholder for adding a chart (e.g., triggering a modal)
+  const dispatch = useDispatch();
+  const handleAddChart = () => {
+    // Example dispatch based on user selection in a modal:
+    dispatch({
+        type: 'charts/ADD_CHART_REQUESTED',
+        payload: {
+            Devicesid: 'rtr-sfo-02',
+            ParamId: 'latency_ms',
+            Graphname: 'SFO Latency',
+            Paramname: 'Latency (ms)'
+        }
+    });
+  };
+
+  return (
+    <Box p={8}>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={6}>
+        <Heading size="lg">Network Dashboard</Heading>
+        <Button colorScheme="teal" onClick={handleAddChart}>
+          + Add New Chart
+        </Button>
+      </Box>
+
+      <SimpleGrid columns={{ base: 1, md: 2, lg: 3 }} spacing={8}>
+        {chartIds.map(chartId => (
+          <RealtimeLineChart 
+            key={chartId} 
+            chartId={chartId} // Pass the Composite Key
+          />
+        ))}
+      </SimpleGrid>
+    </Box>
+  );
+};
+
+export default Dashboard;
+
+
+
+
+
+
+
+When the monitoring is started at 9am the window length is 1hr after 1 hour the window, the data showing must move to next window like 9.10 am
+
+
+This is a classic requirement for real-time monitoring: displaying a sliding time window on your line charts. You want the chart to initially show a fixed 1-hour span (e.g., 9:00 am to 10:00 am), and then smoothly shift forward as new data arrives, maintaining the 1-hour width (e.g., 9:10 am to 10:10 am).
+
+In your React/ApexCharts setup, this is controlled primarily through the data management in your Redux reducer and the xaxis configuration in ApexCharts.
+
+Here is the strategy and the code updates required:
+
+1. Redux Reducer: Pruning Old Data (Sliding Window Data Management)
+To keep the application fast and efficient, your Redux state should only store the data points necessary for the current 1-hour window.
+
+You need to update your CHART_DATA_RECEIVED case to prune data points that fall outside the 1-hour window, relative to the newest data point's timestamp.
+
+Let's assume the window length is 1 hour (3,600,000 milliseconds).
+
+JavaScript
+
+// src/redux/reducers/chartsReducer.js (Updated CHART_DATA_RECEIVED case)
+
+case 'CHART_DATA_RECEIVED':
+    const { Devicesid, ParamId, dataPoint } = action.payload;
+    const dataChartId = createChartId(Devicesid, ParamId);
+    
+    if (!state.instances[dataChartId]) return state; 
+    
+    // --- Pruning Logic for 1-Hour Sliding Window ---
+    
+    const WINDOW_DURATION_MS = 60 * 60 * 1000; // 1 hour in milliseconds
+    
+    // 1. Get the timestamp of the newest data point
+    const newTimestamp = dataPoint.timestamp;
+    
+    // 2. Calculate the oldest timestamp to keep
+    const cutoffTimestamp = newTimestamp - WINDOW_DURATION_MS;
+    
+    // 3. Filter the existing data array (pruning old points)
+    const existingData = state.instances[dataChartId].Chartdata.Data;
+    const prunedData = existingData.filter(point => point.timestamp >= cutoffTimestamp);
+    
+    // 4. Append the new data point
+    const newChartData = [...prunedData, dataPoint];
+    
+    return {
+        ...state,
+        instances: {
+            ...state.instances,
+            [dataChartId]: {
+                ...state.instances[dataChartId], 
+                Chartdata: {
+                    Data: newChartData // Store the pruned array + new point
+                }
+            }
+        }
+    };
+2. ApexCharts: X-Axis Configuration (Automatic Window Shifting)
+The good news is that once your Redux state is only providing 1 hour's worth of data, ApexCharts will handle the sliding window visualization automatically.
+
+By setting the X-axis type to datetime and letting the data determine the axis bounds, the chart will shift its view as the oldest data points are removed and the newest ones are added.
+
+In the RealtimeLineChart.jsx component, ensure the xaxis is configured as follows:
+
+JavaScript
+
+// src/components/charts/RealtimeLineChart.jsx (within the options object)
+
+const options = {
+    // ...
+    chart: {
+        id: chartId,
+        animations: {
+            enabled: true, // Keep animations enabled for a smooth slide effect
+            easing: 'linear',
+            dynamicAnimation: { speed: 1000 }
+        },
+        // ...
+    },
+    xaxis: {
+        type: 'datetime',
+        // DO NOT set a 'range' here; let the data (which is already pruned) define the window.
+        labels: {
+             // ... styling
+        }
+    },
+    // ...
+};
+Summary of the Flow:
+New Data Arrives (e.g., at 10:10:00 am) via the socket.
+
+Reducer Calculates the new cutoff time (9:10:00 am).
+
+Reducer Prunes all data points older than 9:10:00 am and Appends the 10:10:00 am point.
+
+React Updates the chart component with the new data array (now spanning 9:10 am to 10:10 am).
+
+ApexCharts renders the new 1-hour window, creating the visual "sliding" effect.
